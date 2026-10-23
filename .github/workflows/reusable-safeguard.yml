@@ -14,14 +14,11 @@ on:
       ORCHESTRATOR_HMAC_SECRET:
         required: false
 
-permissions:
-  contents: read
-  security-events: write
-  pull-requests: write
-
 jobs:
   deterministic-sweep:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout Code (Full History for Diff Analysis)
         uses: actions/checkout@v4
@@ -29,10 +26,10 @@ jobs:
           fetch-depth: 0
 
       - name: 1. Gitleaks Fast Entropy & Regex Sweep
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_ENABLE_SUMMARY: true
+        run: |
+          wget -q https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.4_linux_x64.tar.gz
+          ./gitleaks detect --source . --redact --verbose
         continue-on-error: true
         id: gitleaks
 
@@ -49,7 +46,7 @@ jobs:
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
           if echo "$CHANGED_FILES" | grep -qE "(supabase/migrations/.*\.sql|firestore\.rules|storage\.rules|vercel\.json|netlify\.toml)"; then
             echo "baas_modified=true" >> $GITHUB_OUTPUT
-            echo "⚠️ High-risk BaaS or infrastructure config change detected."
+            echo "High-risk BaaS or infrastructure config change detected."
           else
             echo "baas_modified=false" >> $GITHUB_OUTPUT
           fi
@@ -75,13 +72,15 @@ jobs:
           
           SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | awk '{print $2}')
           
-          curl -s -X POST "$WEBHOOK_URL" \
+          HTTP_STATUS=$(curl -s -o /tmp/orch_resp.txt -w "%{http_code}" -X POST "$WEBHOOK_URL" \
             -H "Content-Type: application/json" \
             -H "X-Safeguard-Signature: sha256=$SIGNATURE" \
-            -d "$PAYLOAD"
+            -d "$PAYLOAD")
+          echo "Gate 3 Orchestrator HTTP Response ($HTTP_STATUS):"
+          cat /tmp/orch_resp.txt
 
       - name: 5. Hard Gate Enforcement
         if: ${{ inputs.project_tier == 'enforcement' && (steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure') }}
         run: |
-          echo "❌ [SAFEGUARD HARD BLOCK] Verified secret or credential leak detected in commit history. Build halted."
+          echo "[SAFEGUARD HARD BLOCK] Verified secret or credential leak detected in commit history. Build halted."
           exit 1
