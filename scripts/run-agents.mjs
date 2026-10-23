@@ -27,7 +27,7 @@ async function runOrchestrator() {
 
   console.log('Running Agent 1 (BaaS & Code Surgeon)...');
   const surgeonResponse = await anthropic.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-3-5-sonnet-20240620',
     max_tokens: 1800,
     system: `You are Agent 1 (The BaaS & Code Surgeon) in a production security orchestrator.
 Analyze the sanitized git diff and telemetry flags. Check strictly for:
@@ -49,7 +49,7 @@ Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact E
 
   console.log('Running Agent 2 (Adversarial Judge)...');
   const judgeResponse = await anthropic.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-3-5-sonnet-20240620',
     max_tokens: 1000,
     system: `You are Agent 2 (The Adversarial Judge). Stress-test Agent 1's security patch.
 Verify whether Agent 1's proposed fix will break legitimate app functionality, lock out authenticated users in RLS, or break Vercel/Netlify builds.
