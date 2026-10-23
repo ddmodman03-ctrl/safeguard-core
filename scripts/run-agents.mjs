@@ -1,4 +1,4 @@
-import fs from 'fs';
+﻿import fs from 'fs';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { Octokit } from '@octokit/rest';
 
@@ -27,7 +27,7 @@ async function runOrchestrator() {
 
   console.log('Running Agent 1 (BaaS & Code Surgeon)...');
   const surgeonResponse = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-3-5-sonnet-20241022',
     max_tokens: 1800,
     system: `You are Agent 1 (The BaaS & Code Surgeon) in a production security orchestrator.
 Analyze the sanitized git diff and telemetry flags. Check strictly for:
@@ -49,7 +49,7 @@ Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact E
 
   console.log('Running Agent 2 (Adversarial Judge)...');
   const judgeResponse = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-3-5-sonnet-20241022',
     max_tokens: 1000,
     system: `You are Agent 2 (The Adversarial Judge). Stress-test Agent 1's security patch.
 Verify whether Agent 1's proposed fix will break legitimate app functionality, lock out authenticated users in RLS, or break Vercel/Netlify builds.
@@ -64,16 +64,16 @@ Output a concise final executive ruling and the verified remediation code block.
 
   const judgeRuling = judgeResponse.content[0].type === 'text' ? judgeResponse.content[0].text : '';
 
-  const reportBody = `## 🛡️ Safeguard Gate 3: Multi-Agent Security Audit
+  const reportBody = `## ðŸ›¡ï¸ Safeguard Gate 3: Multi-Agent Security Audit
 **Commit:** \`${commit_sha}\`
 **Deterministic Triggers:** Gitleaks: \`${gitleaks_status}\` | TruffleHog: \`${trufflehog_status}\` | BaaS/Infra Modified: \`${baas_schema_changed}\`
 
 ---
-### 🔍 Agent 1: BaaS & Code Surgeon Findings
+### ðŸ” Agent 1: BaaS & Code Surgeon Findings
 ${surgeonAnalysis}
 
 ---
-### ⚖️ Agent 2: Adversarial Judge Ruling
+### âš–ï¸ Agent 2: Adversarial Judge Ruling
 ${judgeRuling}`;
 
   await octokit.repos.createCommitComment({
@@ -87,7 +87,7 @@ ${judgeRuling}`;
     const issue = await octokit.issues.create({
       owner,
       repo,
-      title: `🚨 [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
+      title: `ðŸš¨ [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
       body: reportBody
     });
     console.log(`Opened Security Alert Issue #${issue.data.number}`);
