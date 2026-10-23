@@ -9,18 +9,14 @@ on:
         default: 'enforcement'
         type: string
     secrets:
-      ORCHESTRATOR_WEBHOOK_URL:
-        required: false
-      ORCHESTRATOR_HMAC_SECRET:
+      ANTHROPIC_API_KEY:
         required: false
 
 jobs:
   deterministic-sweep:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - name: Checkout Code (Full History for Diff Analysis)
+      - name: Checkout Project Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -43,6 +39,7 @@ jobs:
       - name: 3. Check for High-Risk BaaS & Infra Schema Changes
         id: baas_check
         run: |
+          git diff HEAD~1 HEAD > /tmp/commit.diff 2>/dev/null || git show HEAD > /tmp/commit.diff
           CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
           if echo "$CHANGED_FILES" | grep -qE "(supabase/migrations/.*\.sql|firestore\.rules|storage\.rules|vercel\.json|netlify\.toml)"; then
             echo "baas_modified=true" >> $GITHUB_OUTPUT
@@ -51,35 +48,31 @@ jobs:
             echo "baas_modified=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: 4. Trigger Gate 3 Agent Orchestrator (Conditional)
+      - name: 4. Checkout Safeguard Core Agent Brain
+        if: ${{ steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure' || steps.baas_check.outputs.baas_modified == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ddmodman03-ctrl/safeguard-core
+          path: .safeguard-brain
+
+      - name: 5. Run Gate 3 Multi-Agent Orchestrator (Surgeon + Judge)
         if: ${{ steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure' || steps.baas_check.outputs.baas_modified == 'true' }}
         env:
-          WEBHOOK_URL: ${{ secrets.ORCHESTRATOR_WEBHOOK_URL }}
-          HMAC_SECRET: ${{ secrets.ORCHESTRATOR_HMAC_SECRET }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITLEAKS_STATUS: ${{ steps.gitleaks.outcome }}
+          TRUFFLEHOG_STATUS: ${{ steps.trufflehog.outcome }}
+          BAAS_MODIFIED: ${{ steps.baas_check.outputs.baas_modified }}
         run: |
-          if [[ -z "$WEBHOOK_URL" ]]; then
-            echo "Gate 3 Orchestrator webhook not connected yet. Skipping agent dispatch."
+          if [[ -z "$ANTHROPIC_API_KEY" ]]; then
+            echo "ANTHROPIC_API_KEY not set in repo secrets. Skipping Gate 3 Agent Audit."
             exit 0
           fi
-          PAYLOAD=$(jq -n \
-            --arg repo "${{ github.repository }}" \
-            --arg sha "${{ github.sha }}" \
-            --arg ref "${{ github.ref }}" \
-            --arg gitleaks "${{ steps.gitleaks.outcome }}" \
-            --arg trufflehog "${{ steps.trufflehog.outcome }}" \
-            --arg baas "${{ steps.baas_check.outputs.baas_modified }}" \
-            '{repository: $repo, commit_sha: $sha, ref: $ref, gitleaks_status: $gitleaks, trufflehog_status: $trufflehog, baas_schema_changed: $baas}')
-          
-          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | awk '{print $2}')
-          
-          HTTP_STATUS=$(curl -s -o /tmp/orch_resp.txt -w "%{http_code}" -X POST "$WEBHOOK_URL" \
-            -H "Content-Type: application/json" \
-            -H "X-Safeguard-Signature: sha256=$SIGNATURE" \
-            -d "$PAYLOAD")
-          echo "Gate 3 Orchestrator HTTP Response ($HTTP_STATUS):"
-          cat /tmp/orch_resp.txt
+          cd .safeguard-brain
+          npm install --no-audit --no-fund
+          node scripts/run-agents.mjs
 
-      - name: 5. Hard Gate Enforcement
+      - name: 6. Hard Gate Enforcement
         if: ${{ inputs.project_tier == 'enforcement' && (steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure') }}
         run: |
           echo "[SAFEGUARD HARD BLOCK] Verified secret or credential leak detected in commit history. Build halted."
