@@ -1,0 +1,87 @@
+name: Safeguard Core Matrix
+
+on:
+  workflow_call:
+    inputs:
+      project_tier:
+        description: 'enforcement | warning | visibility'
+        required: false
+        default: 'enforcement'
+        type: string
+    secrets:
+      ORCHESTRATOR_WEBHOOK_URL:
+        required: false
+      ORCHESTRATOR_HMAC_SECRET:
+        required: false
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  deterministic-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code (Full History for Diff Analysis)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 1. Gitleaks Fast Entropy & Regex Sweep
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: true
+        continue-on-error: true
+        id: gitleaks
+
+      - name: 2. TruffleHog Live Credential Verification
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified --json
+        continue-on-error: true
+        id: trufflehog
+
+      - name: 3. Check for High-Risk BaaS & Infra Schema Changes
+        id: baas_check
+        run: |
+          CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git ls-files)
+          if echo "$CHANGED_FILES" | grep -qE "(supabase/migrations/.*\.sql|firestore\.rules|storage\.rules|vercel\.json|netlify\.toml)"; then
+            echo "baas_modified=true" >> $GITHUB_OUTPUT
+            echo "⚠️ High-risk BaaS or infrastructure config change detected."
+          else
+            echo "baas_modified=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 4. Trigger Gate 3 Agent Orchestrator (Conditional)
+        if: ${{ steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure' || steps.baas_check.outputs.baas_modified == 'true' }}
+        env:
+          WEBHOOK_URL: ${{ secrets.ORCHESTRATOR_WEBHOOK_URL }}
+          HMAC_SECRET: ${{ secrets.ORCHESTRATOR_HMAC_SECRET }}
+        run: |
+          if [[ -z "$WEBHOOK_URL" ]]; then
+            echo "Gate 3 Orchestrator webhook not connected yet. Skipping agent dispatch."
+            exit 0
+          fi
+          PAYLOAD=$(jq -n \
+            --arg repo "${{ github.repository }}" \
+            --arg sha "${{ github.sha }}" \
+            --arg ref "${{ github.ref }}" \
+            --arg gitleaks "${{ steps.gitleaks.outcome }}" \
+            --arg trufflehog "${{ steps.trufflehog.outcome }}" \
+            --arg baas "${{ steps.baas_check.outputs.baas_modified }}" \
+            '{repository: $repo, commit_sha: $sha, ref: $ref, gitleaks_status: $gitleaks, trufflehog_status: $trufflehog, baas_schema_changed: $baas}')
+          
+          SIGNATURE=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$HMAC_SECRET" | awk '{print $2}')
+          
+          curl -s -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "X-Safeguard-Signature: sha256=$SIGNATURE" \
+            -d "$PAYLOAD"
+
+      - name: 5. Hard Gate Enforcement
+        if: ${{ inputs.project_tier == 'enforcement' && (steps.gitleaks.outcome == 'failure' || steps.trufflehog.outcome == 'failure') }}
+        run: |
+          echo "❌ [SAFEGUARD HARD BLOCK] Verified secret or credential leak detected in commit history. Build halted."
+          exit 1
