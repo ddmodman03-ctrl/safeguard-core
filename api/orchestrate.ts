@@ -2,14 +2,10 @@ import crypto from 'crypto';
 import Anthropic from '@anthropic-ai/sdk';
 import { Octokit } from '@octokit/rest';
 
-// Deterministic sanitizer: ensures raw secrets never reach LLM context windows
 function sanitizeDiff(rawDiff: string): string {
   return rawDiff
-    // Mask Stripe live/test keys
     .replace(/\b(sk_live_|rk_live_|sk_test_|rk_test_)[0-9a-zA-Z]{10,}\b/g, '$1[REDACTED_BY_SAFEGUARD]')
-    // Mask AWS Access Keys
     .replace(/\b(AKIA|ASIA)[0-9A-Z]{16}\b/g, '$1[REDACTED_BY_SAFEGUARD]')
-    // Mask generic high-entropy Bearer/API assignments
     .replace(/(api[_-]?key|secret|token|password|service_role)\s*[:=]\s*['"][^'"]{12,}['"]/gi, '$1: "[REDACTED_BY_SAFEGUARD]"');
 }
 
@@ -18,25 +14,30 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const signatureHeader = req.headers['x-safeguard-signature'] || '';
-  const hmacSecret = process.env.ORCHESTRATOR_HMAC_SECRET || '';
-  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+  const signatureHeader = (req.headers['x-safeguard-signature'] || '').trim();
+  const hmacSecret = (process.env.ORCHESTRATOR_HMAC_SECRET || '').trim();
+  const payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
 
-  // 1. Cryptographic HMAC Verification
-  const expectedSig = 'sha256=' + crypto.createHmac('sha256', hmacSecret).update(rawBody).digest('hex');
-  if (!hmacSecret || signatureHeader !== expectedSig) {
-    return res.status(401).json({ error: 'Invalid HMAC signature' });
+  // Verify HMAC using either raw body or canonical repo:sha string (immune to JSON whitespace differences)
+  const rawBody = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+  const expectedRawSig = 'sha256=' + crypto.createHmac('sha256', hmacSecret).update(rawBody).digest('hex');
+  const canonicalString = `${payload.repository}:${payload.commit_sha}`;
+  const expectedCanonicalSig = 'sha256=' + crypto.createHmac('sha256', hmacSecret).update(canonicalString).digest('hex');
+
+  if (!hmacSecret || (signatureHeader !== expectedRawSig && signatureHeader !== expectedCanonicalSig)) {
+    return res.status(401).json({
+      error: 'Invalid HMAC signature',
+      hint: 'Check ORCHESTRATOR_HMAC_SECRET match'
+    });
   }
 
-  const payload = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const { repository, commit_sha, gitleaks_status, trufflehog_status, baas_schema_changed } = payload;
   const [owner, repo] = repository.split('/');
 
-  const octokit = new Octokit({ auth: process.env.SAFEGUARD_GITHUB_PAT });
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  const octokit = new Octokit({ auth: (process.env.SAFEGUARD_GITHUB_PAT || '').trim() });
+  const anthropic = new Anthropic({ apiKey: (process.env.ANTHROPIC_API_KEY || '').trim() });
 
   try {
-    // 2. Fetch the commit diff from GitHub
     const commitData = await octokit.repos.getCommit({
       owner,
       repo,
@@ -44,10 +45,9 @@ export default async function handler(req: any, res: any) {
       mediaType: { format: 'diff' }
     });
 
-    const rawDiff = String(commitData.data).slice(0, 35000); // Bound context size
+    const rawDiff = String(commitData.data).slice(0, 35000);
     const safeDiff = sanitizeDiff(rawDiff);
 
-    // 3. AGENT 1: The Infrastructure & BaaS Surgeon
     const surgeonResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1800,
@@ -69,11 +69,10 @@ Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact E
 
     const surgeonAnalysis = surgeonResponse.content[0].type === 'text' ? surgeonResponse.content[0].text : '';
 
-    // 4. AGENT 2: The Adversarial Judge (Dual-Loop Verification)
     const judgeResponse = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1000,
-      system: `You are Agent 2 (The Adversarial Judge). Your job is to stress-test Agent 1's security patch.
+      system: `You are Agent 2 (The Adversarial Judge). Stress-test Agent 1's security patch.
 Verify whether Agent 1's proposed fix will break legitimate app functionality, lock out authenticated users in RLS, or break Vercel/Netlify builds.
 Output a concise final executive ruling and the verified remediation code block.`,
       messages: [
@@ -86,7 +85,6 @@ Output a concise final executive ruling and the verified remediation code block.
 
     const judgeRuling = judgeResponse.content[0].type === 'text' ? judgeResponse.content[0].text : '';
 
-    // 5. Post the Verified Audit Report directly to the GitHub Commit & Open an Issue if Critical
     const reportBody = `## 🛡️ Safeguard Gate 3: Multi-Agent Security Audit
 **Commit:** \`${commit_sha}\`
 **Deterministic Triggers:** Gitleaks: \`${gitleaks_status}\` | TruffleHog: \`${trufflehog_status}\` | BaaS/Infra Modified: \`${baas_schema_changed}\`
