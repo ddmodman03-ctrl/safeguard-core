@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/orchestrate.ts": {
+      "maxDuration": 60
+    }
+  }
+}
