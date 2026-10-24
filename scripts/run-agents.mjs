@@ -44,7 +44,7 @@ Provide exactly: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B)
   console.log('--- SURGEON RAW API RESPONSE ---');
   console.log(JSON.stringify(surgeonResponse, null, 2));
 
-  const surgeonAnalysis = surgeonResponse?.content?.[0]?.text || 'Error: No text extracted from Surgeon';
+  const surgeonAnalysis = surgeonResponse?.content?.map(c => c.text)?.join('\n') || JSON.stringify(surgeonResponse?.content || surgeonResponse);
 
   console.log('Running Agent 2 (Adversarial Judge)...');
   const judgeResponse = await anthropic.messages.create({
@@ -65,18 +65,18 @@ Output a 2-sentence final executive ruling and the verified remediation code blo
   console.log('--- JUDGE RAW API RESPONSE ---');
   console.log(JSON.stringify(judgeResponse, null, 2));
 
-  const judgeRuling = judgeResponse?.content?.[0]?.text || 'Error: No text extracted from Judge';
+  const judgeRuling = judgeResponse?.content?.map(c => c.text)?.join('\n') || JSON.stringify(judgeResponse?.content || judgeResponse);
 
-  const reportBody = `## 🛡️ Safeguard Gate 3: Multi-Agent Security Audit
+  const reportBody = `## ðŸ›¡ï¸ Safeguard Gate 3: Multi-Agent Security Audit
 **Commit:** \`${commit_sha}\`
 **Deterministic Triggers:** Gitleaks: \`${gitleaks_status}\` | TruffleHog: \`${trufflehog_status}\` | BaaS/Infra Modified: \`${baas_schema_changed}\`
 
 ---
-### 🔍 Agent 1: BaaS & Code Surgeon Findings
+### ðŸ” Agent 1: BaaS & Code Surgeon Findings
 ${surgeonAnalysis}
 
 ---
-### ⚖️ Agent 2: Adversarial Judge Ruling
+### âš–ï¸ Agent 2: Adversarial Judge Ruling
 ${judgeRuling}`;
 
   await octokit.repos.createCommitComment({
@@ -90,7 +90,7 @@ ${judgeRuling}`;
     await octokit.issues.create({
       owner,
       repo,
-      title: `🚨 [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
+      title: `ðŸš¨ [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
       body: reportBody
     });
     console.log(`Opened Security Alert Issue!`);
