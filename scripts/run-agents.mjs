@@ -1,4 +1,4 @@
-﻿import fs from 'fs';
+import fs from 'fs';
 import { Anthropic } from '@anthropic-ai/sdk';
 import { Octokit } from '@octokit/rest';
 
@@ -45,7 +45,10 @@ Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact E
     ]
   });
 
-  const surgeonAnalysis = surgeonResponse.content[0].type === 'text' ? surgeonResponse.content[0].text : '';
+  console.log('--- SURGEON RAW API RESPONSE ---');
+  console.log(JSON.stringify(surgeonResponse, null, 2));
+
+  const surgeonAnalysis = surgeonResponse?.content?.[0]?.text || 'Error: No text extracted from Surgeon';
 
   console.log('Running Agent 2 (Adversarial Judge)...');
   const judgeResponse = await anthropic.messages.create({
@@ -62,18 +65,21 @@ Output a concise final executive ruling and the verified remediation code block.
     ]
   });
 
-  const judgeRuling = judgeResponse.content[0].type === 'text' ? judgeResponse.content[0].text : '';
+  console.log('--- JUDGE RAW API RESPONSE ---');
+  console.log(JSON.stringify(judgeResponse, null, 2));
 
-  const reportBody = `## ðŸ›¡ï¸ Safeguard Gate 3: Multi-Agent Security Audit
+  const judgeRuling = judgeResponse?.content?.[0]?.text || 'Error: No text extracted from Judge';
+
+  const reportBody = `## 🛡️ Safeguard Gate 3: Multi-Agent Security Audit
 **Commit:** \`${commit_sha}\`
 **Deterministic Triggers:** Gitleaks: \`${gitleaks_status}\` | TruffleHog: \`${trufflehog_status}\` | BaaS/Infra Modified: \`${baas_schema_changed}\`
 
 ---
-### ðŸ” Agent 1: BaaS & Code Surgeon Findings
+### 🔍 Agent 1: BaaS & Code Surgeon Findings
 ${surgeonAnalysis}
 
 ---
-### âš–ï¸ Agent 2: Adversarial Judge Ruling
+### ⚖️ Agent 2: Adversarial Judge Ruling
 ${judgeRuling}`;
 
   await octokit.repos.createCommitComment({
@@ -87,7 +93,7 @@ ${judgeRuling}`;
     const issue = await octokit.issues.create({
       owner,
       repo,
-      title: `ðŸš¨ [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
+      title: `🚨 [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
       body: reportBody
     });
     console.log(`Opened Security Alert Issue #${issue.data.number}`);
