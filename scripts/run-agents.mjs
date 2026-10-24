@@ -41,6 +41,9 @@ Provide exactly: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B)
     ]
   });
 
+  console.log('--- SURGEON RAW API RESPONSE ---');
+  console.log(JSON.stringify(surgeonResponse, null, 2));
+
   const surgeonAnalysis = surgeonResponse?.content?.[0]?.text || 'Error: No text extracted from Surgeon';
 
   console.log('Running Agent 2 (Adversarial Judge)...');
@@ -58,6 +61,9 @@ Output a 2-sentence final executive ruling and the verified remediation code blo
       }
     ]
   });
+
+  console.log('--- JUDGE RAW API RESPONSE ---');
+  console.log(JSON.stringify(judgeResponse, null, 2));
 
   const judgeRuling = judgeResponse?.content?.[0]?.text || 'Error: No text extracted from Judge';
 
