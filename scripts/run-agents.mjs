@@ -28,15 +28,11 @@ async function runOrchestrator() {
   console.log('Running Agent 1 (BaaS & Code Surgeon)...');
   const surgeonResponse = await anthropic.messages.create({
     model: 'claude-sonnet-5-5',
-    max_tokens: 1800,
-    system: `You are Agent 1 (The BaaS & Code Surgeon) in a production security orchestrator.
-Analyze the sanitized git diff and telemetry flags. Check strictly for:
-1. Supabase SQL migrations creating tables without 'ENABLE ROW LEVEL SECURITY' or permissive 'USING (true)' write policies.
-2. Firebase firestore.rules / storage.rules allowing unauthenticated writes.
-3. Stripe or Mux webhook handlers parsing payloads without signature verification.
-4. Client-side env exposure (NEXT_PUBLIC_ / VITE_ / EXPO_PUBLIC_ wrapping secret or service_role keys).
-5. Hardcoded credentials flagged by Gitleaks/TruffleHog.
-Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact Exploit Vector, and (C) Drop-in Code/SQL Remediation Patch.`,
+    max_tokens: 4096,
+    system: `You are Agent 1 (The BaaS & Code Surgeon).
+Analyze the sanitized git diff. Check strictly for Supabase/Firebase RLS vulnerabilities, unverified webhooks, and exposed env vars.
+CRITICAL INSTRUCTION: Be extremely concise. Do not write an essay.
+Provide exactly: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact Exploit Vector (1 sentence), and (C) Drop-in Code/SQL Remediation Patch.`,
     messages: [
       {
         role: 'user',
@@ -45,18 +41,16 @@ Provide: (A) Severity Verdict [CRITICAL | WARNING | FALSE_POSITIVE], (B) Exact E
     ]
   });
 
-  console.log('--- SURGEON RAW API RESPONSE ---');
-  console.log(JSON.stringify(surgeonResponse, null, 2));
-
   const surgeonAnalysis = surgeonResponse?.content?.[0]?.text || 'Error: No text extracted from Surgeon';
 
   console.log('Running Agent 2 (Adversarial Judge)...');
   const judgeResponse = await anthropic.messages.create({
     model: 'claude-sonnet-5-5',
-    max_tokens: 1000,
-    system: `You are Agent 2 (The Adversarial Judge). Stress-test Agent 1's security patch.
-Verify whether Agent 1's proposed fix will break legitimate app functionality, lock out authenticated users in RLS, or break Vercel/Netlify builds.
-Output a concise final executive ruling and the verified remediation code block.`,
+    max_tokens: 4096,
+    system: `You are Agent 2 (The Adversarial Judge). 
+Stress-test Agent 1's security patch. Will it break legitimate app functionality?
+CRITICAL INSTRUCTION: Be extremely concise. 
+Output a 2-sentence final executive ruling and the verified remediation code block.`,
     messages: [
       {
         role: 'user',
@@ -64,9 +58,6 @@ Output a concise final executive ruling and the verified remediation code block.
       }
     ]
   });
-
-  console.log('--- JUDGE RAW API RESPONSE ---');
-  console.log(JSON.stringify(judgeResponse, null, 2));
 
   const judgeRuling = judgeResponse?.content?.[0]?.text || 'Error: No text extracted from Judge';
 
@@ -90,13 +81,13 @@ ${judgeRuling}`;
   });
 
   if (gitleaks_status === 'failure' || trufflehog_status === 'failure' || surgeonAnalysis.includes('CRITICAL')) {
-    const issue = await octokit.issues.create({
+    await octokit.issues.create({
       owner,
       repo,
       title: `🚨 [Safeguard Alert] Security intervention required on commit ${commit_sha.slice(0, 7)}`,
       body: reportBody
     });
-    console.log(`Opened Security Alert Issue #${issue.data.number}`);
+    console.log(`Opened Security Alert Issue!`);
   }
 }
 
